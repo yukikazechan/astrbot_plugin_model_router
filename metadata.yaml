@@ -1,0 +1,5 @@
+name: astrbot_plugin_model_router
+version: 0.3.0
+author: Antigravity
+description: 基于意图识别的多模型路由插件，支持根据任务难度自动切换模型。
+url: https://github.com/AstrBot-Plugins/astrbot_plugin_model_router

@@ -1,0 +1,540 @@
+{
+    "plugin_enabled": {
+        "type": "bool",
+        "description": "插件开关 (Plugin Enable)",
+        "default": true
+    },
+    "router_config": {
+        "type": "object",
+        "description": "🧠 核心路由设置 (Core Settings)",
+        "items": {
+            "debug_mode": {
+                "type": "bool",
+                "description": "调试模式 (Debug Mode)",
+                "hint": "开启后，将发送路由决策过程到指定会话。",
+                "default": false
+            },
+            "debug_target_sid": {
+                "type": "string",
+                "description": "Debug 信息接收会话 (Debug Target SID)",
+                "hint": "接收 debug 信息的会话 ID (格式: 平台:类型:ID)。留空则在当前会话追加发送。",
+                "default": ""
+            },
+            "router_provider": {
+                "type": "string",
+                "description": "路由模型服务商 (Router Provider)",
+                "hint": "负责分析用户意图并分发任务，建议使用快速的小模型。",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "router_model": {
+                "type": "string",
+                "description": "路由模型名称 (Router Model)",
+                "hint": "指定路由使用的具体模型名称 (如 gemini-2.5-flash-lite)。留空则使用服务商默认模型。",
+                "default": ""
+            },
+            "router_manual_prompt": {
+                "type": "text",
+                "description": "路由提示词模板 (Prompt Template)",
+                "hint": "必需包含 {categories} 占位符。插件运行时会将下方配置的所有规则自动填充到这里。\n替换后的效果示例：\n - \"math\": Simple arithmetic\n - \"code\": Python scripting\n路由模型将根据这些定义来判断用户意图。",
+                "default": "You are a Model Router. Analyze user input and output JSON.\n\nOutput format:\n{\"difficulty_score\": 1-9, \"category\": String, \"reasoning\": \"Brief\"}\n\nCategories: {valid_cats_json}\n{categories}\n\n=== DIFFICULTY SCALE (1-9) ===\n\nLOW TIER (1-3) - Lightweight Model (Flash):\n- 1: Fixed replies (greetings, thanks, confirmations)\n- 2: Single-step execution (weather query, translation, format conversion, single tool call)\n- 3: Standard reasoning (algorithm implementation, math proofs, code analysis, concept explanation)\n\nMID TIER (4-6) - Standard Model (Pro):\n- 4: Multi-step integration (search+analyze+suggest, 3000+ word document comprehension)\n- 5: Complex generation (function refactoring, multi-file understanding, long-form writing)\n- 6: Quality planning (project design, complex itinerary planning, architecture design)\n\nHIGH TIER (7-9) - Premium Model (Top):\n- 7: Very long context (10000+ lines code analysis, multi-document synthesis)\n- 8: Cross-domain integration (interdisciplinary system design, complex technical decisions)\n- 9: Extreme tasks (complete product architecture, frontier problem analysis, large-scale refactoring)\n\n=== KEY RULES ===\n1. Function/tool calls do NOT automatically add difficulty - only if multi-step coordination is needed\n2. \"Check weather\" = 2, NOT 4-5 (simple tool call with clear parameters)\n3. Standard reasoning tasks (proofs, algorithms) = 3, NOT higher\n4. Score based on THINKING COMPLEXITY, not task type\n5. Consider conversation context - \"yes\" might refer to a complex prior question",
+                "editor_mode": true
+            },
+            "context_turns": {
+                "type": "int",
+                "description": "上下文轮数 (Context Turns)",
+                "hint": "路由判断时包含最近几轮对话历史 (1轮 = 用户消息 + 助手回复)。设置 0 则只看当前消息。设置 4 表示包含最近 4 轮对话 (8条消息)。当用户回复简短消息 (如 '5', '是的') 时，上下文能帮助路由模型理解这是在回答什么问题。",
+                "default": 4
+            }
+        }
+    },
+    "tier_low": {
+        "type": "object",
+        "description": "🟢 低难度框架 (Low Tier) - 简单任务/闲聊",
+        "items": {
+            "max_score": {
+                "type": "int",
+                "description": "评分范围上限 (Max Score)",
+                "hint": "路由模型会给用户消息打分 (1-10)。如果分数 <= 此值 (且 >= 1)，将进入 Low Tier 寻找匹配规则。",
+                "default": 3
+            },
+            "global_provider": {
+                "type": "string",
+                "description": "【兜底】默认模型服务商 (Global Provider)",
+                "hint": "当用户意图匹配到此 Tier，但没有命中下方的任何具体规则 (r1-r6) 时，使用的备用模型。对于 Low Tier，建议配置一个极速且便宜的模型。",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "global_model": {
+                "type": "string",
+                "description": "【兜底】默认模型名称 (Global Model)",
+                "default": ""
+            },
+            "r1_name": {
+                "type": "string",
+                "description": "规则 1 (Math) - 识别键名",
+                "hint": "路由模型输出的 category 字段值。必须是英文单词，例如 'math'。",
+                "default": "math"
+            },
+            "r1_desc": {
+                "type": "string",
+                "description": "规则 1 - 意图定义",
+                "hint": "告诉路由模型什么样的消息属于这个分类。例如 'Simple arithmetic, calculation.'。",
+                "default": "Simple arithmetic, calculation."
+            },
+            "r1_provider": {
+                "type": "string",
+                "description": "规则 1 - 指定服务商",
+                "hint": "命中此规则时使用的模型服务商。",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r1_model": {
+                "type": "string",
+                "description": "规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r2_name": {
+                "type": "string",
+                "description": "规则 2 (Code) - 识别键名",
+                "hint": "路由模型输出的 category 字段值。例如 'code'。",
+                "default": "code"
+            },
+            "r2_desc": {
+                "type": "string",
+                "description": "规则 2 - 意图定义",
+                "hint": "例如 'Simple scripting, syntax definition.'。",
+                "default": "Simple scripting, syntax definition."
+            },
+            "r2_provider": {
+                "type": "string",
+                "description": "规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r2_model": {
+                "type": "string",
+                "description": "规则 2 - 指定模型名",
+                "default": ""
+            },
+            "r3_name": {
+                "type": "string",
+                "description": "规则 3 (Roleplay) - 识别键名",
+                "hint": "例如 'roleplay'。",
+                "default": "roleplay"
+            },
+            "r3_desc": {
+                "type": "string",
+                "description": "规则 3 - 意图定义",
+                "hint": "例如 'Roleplay, character interaction.'。",
+                "default": "Roleplay, character interaction."
+            },
+            "r3_provider": {
+                "type": "string",
+                "description": "规则 3 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r3_model": {
+                "type": "string",
+                "description": "规则 3 - 指定模型名",
+                "default": ""
+            },
+            "r4_name": {
+                "type": "string",
+                "description": "规则 4 (Chat) - 识别键名",
+                "hint": "例如 'chat'。",
+                "default": "chat"
+            },
+            "r4_desc": {
+                "type": "string",
+                "description": "规则 4 - 意图定义",
+                "hint": "例如 'General conversation, greetings.'。",
+                "default": "General conversation, greetings."
+            },
+            "r4_provider": {
+                "type": "string",
+                "description": "规则 4 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r4_model": {
+                "type": "string",
+                "description": "规则 4 - 指定模型名",
+                "default": ""
+            },
+            "r5_name": {
+                "type": "string",
+                "description": "自定义规则 1 - 识别键名",
+                "hint": "留空则禁用此规则。",
+                "default": ""
+            },
+            "r5_desc": {
+                "type": "string",
+                "description": "自定义规则 1 - 意图定义",
+                "default": ""
+            },
+            "r5_provider": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r5_model": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r6_name": {
+                "type": "string",
+                "description": "自定义规则 2 - 识别键名",
+                "hint": "留空则禁用此规则。",
+                "default": ""
+            },
+            "r6_desc": {
+                "type": "string",
+                "description": "自定义规则 2 - 意图定义",
+                "default": ""
+            },
+            "r6_provider": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r6_model": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定模型名",
+                "default": ""
+            }
+        }
+    },
+    "tier_mid": {
+        "type": "object",
+        "description": "🟡 中难度框架 (Mid Tier) - 常规问题/逻辑分析",
+        "items": {
+            "max_score": {
+                "type": "int",
+                "description": "评分范围上限 (Max Score)",
+                "hint": "如果分数 > Low Tier Max 且 <= 此值，将进入 Mid Tier。",
+                "default": 7
+            },
+            "global_provider": {
+                "type": "string",
+                "description": "【兜底】默认模型服务商 (Global Provider)",
+                "hint": "Mid Tier 的默认模型。建议使用能力均衡的模型。",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "global_model": {
+                "type": "string",
+                "description": "【兜底】默认模型名称 (Global Model)",
+                "default": ""
+            },
+            "r1_name": {
+                "type": "string",
+                "description": "规则 1 (Math) - 识别键名",
+                "default": "math"
+            },
+            "r1_desc": {
+                "type": "string",
+                "description": "规则 1 - 意图定义",
+                "default": "Standard math problems."
+            },
+            "r1_provider": {
+                "type": "string",
+                "description": "规则 1 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r1_model": {
+                "type": "string",
+                "description": "规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r2_name": {
+                "type": "string",
+                "description": "规则 2 (Code) - 识别键名",
+                "default": "code"
+            },
+            "r2_desc": {
+                "type": "string",
+                "description": "规则 2 - 意图定义",
+                "default": "Debugging, functionality implementation."
+            },
+            "r2_provider": {
+                "type": "string",
+                "description": "规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r2_model": {
+                "type": "string",
+                "description": "规则 2 - 指定模型名",
+                "default": ""
+            },
+            "r3_name": {
+                "type": "string",
+                "description": "规则 3 (Roleplay) - 识别键名",
+                "default": "roleplay"
+            },
+            "r3_desc": {
+                "type": "string",
+                "description": "规则 3 - 意图定义",
+                "default": "Roleplay, character interaction."
+            },
+            "r3_provider": {
+                "type": "string",
+                "description": "规则 3 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r3_model": {
+                "type": "string",
+                "description": "规则 3 - 指定模型名",
+                "default": ""
+            },
+            "r4_name": {
+                "type": "string",
+                "description": "规则 4 (Chat) - 识别键名",
+                "default": "chat"
+            },
+            "r4_desc": {
+                "type": "string",
+                "description": "规则 4 - 意图定义",
+                "default": "Detailed conversation."
+            },
+            "r4_provider": {
+                "type": "string",
+                "description": "规则 4 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r4_model": {
+                "type": "string",
+                "description": "规则 4 - 指定模型名",
+                "default": ""
+            },
+            "r5_name": {
+                "type": "string",
+                "description": "自定义规则 1 - 识别键名",
+                "default": ""
+            },
+            "r5_desc": {
+                "type": "string",
+                "description": "自定义规则 1 - 意图定义",
+                "default": ""
+            },
+            "r5_provider": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r5_model": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r6_name": {
+                "type": "string",
+                "description": "自定义规则 2 - 识别键名",
+                "default": ""
+            },
+            "r6_desc": {
+                "type": "string",
+                "description": "自定义规则 2 - 意图定义",
+                "default": ""
+            },
+            "r6_provider": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r6_model": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定模型名",
+                "default": ""
+            }
+        }
+    },
+    "tier_high": {
+        "type": "object",
+        "description": "🔴 高难度框架 (High Tier) - 复杂推理/创意创作",
+        "items": {
+            "global_provider": {
+                "type": "string",
+                "description": "【兜底】默认模型服务商 (Global Provider)",
+                "hint": "High Tier 的默认模型。建议使用最强模型。",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "global_model": {
+                "type": "string",
+                "description": "【兜底】默认模型名称 (Global Model)",
+                "default": ""
+            },
+            "r1_name": {
+                "type": "string",
+                "description": "规则 1 (Math) - 识别键名",
+                "default": "math"
+            },
+            "r1_desc": {
+                "type": "string",
+                "description": "规则 1 - 意图定义",
+                "default": "Complex reasoning, proof, theorem."
+            },
+            "r1_provider": {
+                "type": "string",
+                "description": "规则 1 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r1_model": {
+                "type": "string",
+                "description": "规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r2_name": {
+                "type": "string",
+                "description": "规则 2 (Code) - 识别键名",
+                "default": "code"
+            },
+            "r2_desc": {
+                "type": "string",
+                "description": "规则 2 - 意图定义",
+                "default": "Architecture design, complex system."
+            },
+            "r2_provider": {
+                "type": "string",
+                "description": "规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r2_model": {
+                "type": "string",
+                "description": "规则 2 - 指定模型名",
+                "default": ""
+            },
+            "r3_name": {
+                "type": "string",
+                "description": "规则 3 (Roleplay) - 识别键名",
+                "default": "roleplay"
+            },
+            "r3_desc": {
+                "type": "string",
+                "description": "规则 3 - 意图定义",
+                "default": "Deep character immersion."
+            },
+            "r3_provider": {
+                "type": "string",
+                "description": "规则 3 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r3_model": {
+                "type": "string",
+                "description": "规则 3 - 指定模型名",
+                "default": ""
+            },
+            "r4_name": {
+                "type": "string",
+                "description": "规则 4 (Chat) - 识别键名",
+                "default": "chat"
+            },
+            "r4_desc": {
+                "type": "string",
+                "description": "规则 4 - 意图定义",
+                "default": "Complex nuance discussion."
+            },
+            "r4_provider": {
+                "type": "string",
+                "description": "规则 4 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r4_model": {
+                "type": "string",
+                "description": "规则 4 - 指定模型名",
+                "default": ""
+            },
+            "r5_name": {
+                "type": "string",
+                "description": "自定义规则 1 - 识别键名",
+                "default": ""
+            },
+            "r5_desc": {
+                "type": "string",
+                "description": "自定义规则 1 - 意图定义",
+                "default": ""
+            },
+            "r5_provider": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r5_model": {
+                "type": "string",
+                "description": "自定义规则 1 - 指定模型名",
+                "default": ""
+            },
+            "r6_name": {
+                "type": "string",
+                "description": "自定义规则 2 - 识别键名",
+                "default": ""
+            },
+            "r6_desc": {
+                "type": "string",
+                "description": "自定义规则 2 - 意图定义",
+                "default": ""
+            },
+            "r6_provider": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定服务商",
+                "_special": "select_provider",
+                "default": ""
+            },
+            "r6_model": {
+                "type": "string",
+                "description": "自定义规则 2 - 指定模型名",
+                "default": ""
+            }
+        }
+    },
+    "session_control": {
+        "type": "object",
+        "description": "⚙️ 会话控制 (Session Control)",
+        "items": {
+            "filter_type": {
+                "type": "string",
+                "description": "过滤模式 (Filter Mode)",
+                "enum": [
+                    "blacklist",
+                    "whitelist"
+                ],
+                "default": "blacklist",
+                "hint": "whitelist: 仅允许白名单内的会话使用路由；blacklist: 黑名单内的会话不使用路由。"
+            },
+            "whitelist": {
+                "type": "list",
+                "description": "白名单 (Whitelist)",
+                "items": {
+                    "type": "string"
+                },
+                "default": [],
+                "hint": "白名单模式下，仅这些会话使用路由。"
+            },
+            "blacklist": {
+                "type": "list",
+                "description": "黑名单 (Blacklist)",
+                "items": {
+                    "type": "string"
+                },
+                "default": [],
+                "hint": "黑名单模式下，这些会话不使用路由。"
+            }
+        }
+    }
+}
