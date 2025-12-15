@@ -8,7 +8,7 @@
 
 ## 📋 更新日志 (Changelog)
 
-### v0.6.0 (2024-12-15)
+### v0.6.0 (2025-12-15)
 - ✨ **任务快照系统**: 支持多任务上下文追踪，AI 可在多个活跃任务间智能选择延续哪个
 - ✨ **多维度难度评分**: 针对 code/math/roleplay/chat 等不同维度提供独立的评分标准
 - ✨ **上下文关系判断**: 新增 `context_relation` (continue/downgrade/unrelated) 和 `continued_task_id` 字段
@@ -56,7 +56,7 @@
 | 等级 | 适用场景 | 关键配置 |
 | :--- | :--- | :--- |
 | **🟢 Low Tier** | 闲聊、简单指令、单一工具调用 | **Max Score (默认3)**: 分数 <= 此值进入 Low Tier。<br>**Global Model**: 此等级的默认模型。<br>**Rules (r1-r6)**: 针对特定分类 (如 math, chat) 指定模型。 |
-| **🟡 Mid Tier** | 一般逻辑、多步任务、文档摘要 | **Max Score (默认7)**: 分数 <= 此值 (且 > Low) 进入 Mid Tier。<br>**Global Model**: 此等级的默认模型。 |
+| **🟡 Mid Tier** | 一般逻辑、多步任务、文档摘要 | **Max Score (默认6)**: 分数 <= 此值 (且 > Low) 进入 Mid Tier。<br>**Global Model**: 此等级的默认模型。 |
 | **🔴 High Tier** | 复杂代码、深度推理、创意写作 | **Global Model**: 此等级的默认模型 (通常配置为最强模型)。<br>**Rules (r1-r6)**: 同样可针对分类指定模型。 |
 
 **规则 (Rules) 配置说明:**
@@ -158,7 +158,7 @@ sequenceDiagram
         
         alt event.get_extra("selected_provider") 存在
             Note over ProcessStage: 🚀 使用插件指定的模型
-            ProcessStage->>TargetLLM: 调用 Claude 3.5 Sonnet
+            ProcessStage->>TargetLLM: 调用目标模型
         else 无标记
             ProcessStage->>TargetLLM: 调用用户默认模型
         end
