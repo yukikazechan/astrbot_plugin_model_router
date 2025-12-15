@@ -6,6 +6,16 @@
 
 实现 "简单问题用小模型（快/省），复杂问题用大模型（强/准）" 的最佳能效比。
 
+## 📋 更新日志 (Changelog)
+
+### v0.6.0 (2024-12-15)
+- ✨ **任务快照系统**: 支持多任务上下文追踪，AI 可在多个活跃任务间智能选择延续哪个
+- ✨ **多维度难度评分**: 针对 code/math/roleplay/chat 等不同维度提供独立的评分标准
+- ✨ **上下文关系判断**: 新增 `context_relation` (continue/downgrade/unrelated) 和 `continued_task_id` 字段
+- ✨ **轮数过期机制**: 快照有效期与 `context_turns` 配置挂钩，而非固定时间
+- ✨ **可配置上下文长度**: 新增 `context_max_chars` 配置，允许自定义每条消息的最大字符数
+- 🐛 **修复延续判断**: 强化 Prompt 规则，确保 continue/downgrade 时必须提供有效的 task_id
+
 ## ✨ 主要功能 (Features)
 
 *   **🧠 智能意图识别**: 自动分析用户输入是闲聊、代码、角色扮演、数学问题还是其他自定义类别。
@@ -36,7 +46,8 @@
 | `router_config.router_provider` | string | - | **(必须)** 负责分析意图的路由模型服务商。建议使用响应快、便宜的小模型。 |
 | `router_config.router_model` | string | - | 指定路由使用的具体模型名称 (留空则用默认)。 |
 | `router_config.debug_mode` | bool | `false` | 开启后，会在控制台或指定会话显示详细的路由分析日志。 |
-| `router_config.context_turns` | int | `4` | 路由判断时参考的对话轮数 (1轮=一问一答)。 |
+| `router_config.context_turns` | int | `4` | 路由判断时参考的对话轮数 (1轮=一问一答)，同时控制任务快照的有效期。 |
+| `router_config.context_max_chars` | int | `500` | 每条上下文消息的最大字符数。设置 0 表示不截断。 |
 
 ### 2. 等级框架 (Three Tiers)
 

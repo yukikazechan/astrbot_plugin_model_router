@@ -20,6 +20,7 @@ class ModelRouterPlugin(Star):
         super().__init__(context)
         self.config = config
         self.router = IntentRouter(context, config)
+        self.task_snapshots = {}  # {session_id: {task_id: {score, category, summary, time}}}
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=9999)
     async def pre_route_message(self, event: AstrMessageEvent):
@@ -76,14 +77,48 @@ class ModelRouterPlugin(Star):
                 if cid:
                     conv = await conv_mgr.get_conversation(umo, cid)
                     if conv and conv.messages:
+                        # Get max chars setting (0 = no truncation)
+                        max_chars = self.config.get("router_config", {}).get("context_max_chars", 500)
                         # Get last few messages for context
                         for msg in conv.messages[-6:]:
-                            contexts.append({"role": msg.role, "content": str(msg.content)[:500]})
+                            content = str(msg.content)
+                            if max_chars > 0:
+                                content = content[:max_chars]
+                            contexts.append({"role": msg.role, "content": content})
             except Exception as e:
                 logger.debug(f"Could not get conversation context: {e}")
             
-            logger.info(f"🧩 Router analyzing: '{user_text[:30]}...'")
-            analysis = await self.router.analyze_intent(user_text, contexts)
+            # === 获取任务快照 ===
+            sid = event.unified_msg_origin
+            session_snapshots = self.task_snapshots.get(sid, {})
+            
+            # 获取配置的上下文轮数
+            context_turns = self.config.get("router_config", {}).get("context_turns", 4)
+            
+            # 清理过期快照 (基于轮数，而非时间)
+            # 每个快照有 turn_count，每次对话后递增
+            # 当 turn_count 超过 context_turns 时过期
+            valid_snapshots = {}
+            for task_id, snap in session_snapshots.items():
+                snap["turn_count"] = snap.get("turn_count", 0) + 1
+                if snap["turn_count"] <= context_turns:
+                    valid_snapshots[task_id] = snap
+                else:
+                    logger.debug(f"📤 Snapshot expired: {task_id} (turn {snap['turn_count']} > {context_turns})")
+            self.task_snapshots[sid] = valid_snapshots
+            
+            # 构建快照列表供路由器使用
+            snapshot_list = []
+            for task_id, snap in valid_snapshots.items():
+                snapshot_list.append({
+                    "id": task_id,
+                    "category": snap["category"],
+                    "score": snap["score"],
+                    "summary": snap.get("summary", "")[:100]
+                })
+
+            logger.info(f"🧩 Router analyzing: '{user_text[:30]}...' (Active snapshots: {len(snapshot_list)})")
+            analysis = await self.router.analyze_intent(user_text, contexts, task_snapshots=snapshot_list)
             
             end_time = time.time()
             router_time_ms = (end_time - start_time) * 1000
@@ -94,16 +129,56 @@ class ModelRouterPlugin(Star):
                     logger.warning("⚠️ Router analysis returned None.")
                 return
             
-            difficulty = analysis.get("difficulty_score", 1)
+            ai_score = analysis.get("difficulty_score", 1)
             category = analysis.get("category", "chat")
             reasoning = analysis.get("reasoning", "")
+            context_relation = analysis.get("context_relation", "unrelated")
+            continued_task_id = analysis.get("continued_task_id")
+            
+            # === 根据 context_relation 决定最终分数 ===
+            final_score = ai_score
+            score_source = "ai"  # 用于 debug
+            
+            if context_relation == "continue" and continued_task_id:
+                # 延续：使用快照分数
+                continued_snap = valid_snapshots.get(continued_task_id)
+                if continued_snap:
+                    final_score = continued_snap["score"]
+                    score_source = f"snapshot:{continued_task_id}"
+                    logger.info(f"🔄 Context CONTINUE: Using snapshot score {final_score} from {continued_task_id}")
+                    
+            elif context_relation == "downgrade" and continued_task_id:
+                # 降级：使用 AI 评判的分数
+                score_source = f"downgrade:{continued_task_id}"
+                logger.info(f"🔽 Context DOWNGRADE: AI re-evaluated to {final_score}")
+                
+            else:  # "unrelated" 或无有效快照
+                score_source = "new"
+                logger.info(f"🆕 Context UNRELATED: Independent score {final_score}")
+            
+            # === 更新快照 (仅当 score >= 4 且非纯闲聊) ===
+            if final_score >= 4:
+                # 生成新的 task_id
+                task_id = f"task_{int(time.time()) % 10000}"
+                # 从用户输入生成简短摘要
+                summary = user_text[:50] + ("..." if len(user_text) > 50 else "")
+                
+                valid_snapshots[task_id] = {
+                    "score": final_score,
+                    "category": category,
+                    "summary": summary,
+                    "turn_count": 0  # 新快照从 0 开始计数
+                }
+                self.task_snapshots[sid] = valid_snapshots
+                logger.debug(f"📸 Snapshot saved: {task_id} (Score {final_score}, Cat: {category})")
+            # 注意：低分闲聊不更新快照，保留之前的高难度任务记录
             
             # 3. Get Target Provider/Model
-            t_provider_id, t_model_name, t_tier_name = self.get_target_config(category, difficulty)
+            t_provider_id, t_model_name, t_tier_name = self.get_target_config(category, final_score)
             
             debug_on = self.config.get("router_config", {}).get("debug_mode", False)
             if debug_on:
-                logger.info(f"🎯 Routing: {category} (Score {difficulty} | {t_tier_name}) -> {t_provider_id}:{t_model_name}")
+                logger.info(f"🎯 Routing: {category} (Score {final_score} | {t_tier_name}) -> {t_provider_id}:{t_model_name}")
             
             if not t_provider_id:
                 # No routing configured, let AstrBot use default
@@ -129,9 +204,14 @@ class ModelRouterPlugin(Star):
                     "time_ms": router_time_ms,
                     "router_model": self.config.get("router_config", {}).get("router_model", "Default"),
                     "category": category,
-                    "difficulty": difficulty,
+                    "ai_score": ai_score,
+                    "final_score": final_score,
                     "tier_name": t_tier_name,
                     "model_display": t_model_name or 'Default',
+                    "context_relation": context_relation,
+                    "continued_task_id": continued_task_id,
+                    "score_source": score_source,
+                    "active_snapshots": len(valid_snapshots),
                     "reasoning": reasoning,
                     "origin_sid": event.unified_msg_origin
                 })
@@ -164,13 +244,22 @@ class ModelRouterPlugin(Star):
             logger.info(f"[Router Debug] {debug_data}")
             return
         
-        # 格式化 debug 消息
+        # 格式化 debug 消息 (新增 context_relation 等字段)
+        context_info = f"📋 Context: {debug_data['context_relation']}"
+        if debug_data['continued_task_id']:
+            context_info += f" -> {debug_data['continued_task_id']}"
+        
+        score_info = f"Score {debug_data['final_score']}"
+        if debug_data['ai_score'] != debug_data['final_score']:
+            score_info = f"Score {debug_data['ai_score']}→{debug_data['final_score']}"
+        
         debug_msg = (
             f"[🧩 Model Router Debug]\n"
             f"⏱️ Time: {debug_data['time_ms']:.1f}ms\n"
             f"🤖 Router: {debug_data['router_model']}\n"
-            f"🎯 Target: {debug_data['category']} (Score {debug_data['difficulty']} | {debug_data['tier_name']}) -> {debug_data['model_display']}\n"
-            f" Reasoning: {debug_data['reasoning']}"
+            f"{context_info} (Snapshots: {debug_data['active_snapshots']})\n"
+            f"🎯 Target: {debug_data['category']} ({score_info} | {debug_data['tier_name']}) -> {debug_data['model_display']}\n"
+            f"💡 Reasoning: {debug_data['reasoning']}"
         )
         
         # 发送到指定 SID

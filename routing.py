@@ -46,14 +46,21 @@ class IntentRouter:
         while len(self._cache) > self.CACHE_MAX_SIZE:
             self._cache.popitem(last=False)
 
-    async def analyze_intent(self, user_text: str, contexts: List[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    async def analyze_intent(self, user_text: str, contexts: List[Dict[str, str]] = None, task_snapshots: List[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Analyze user intent using dynamically built system prompt.
-        Now includes conversation context for better multi-turn judgment.
+        Now includes task snapshots for multi-task context awareness.
         Includes caching for performance optimization.
+        
+        Args:
+            user_text: Current user input
+            contexts: Recent conversation history
+            task_snapshots: List of active task snapshots, each with {id, category, score, summary}
         """
         if contexts is None:
             contexts = []
+        if task_snapshots is None:
+            task_snapshots = []
         
         # --- 缓存检查 ---
         cache_key = self._get_cache_key(user_text, contexts)
@@ -85,7 +92,6 @@ class IntentRouter:
         categories_map = {} # name -> list of descriptions
         
         # Helper to process fixed slots
-        # Helper to process fixed slots
         def process_slots(tier_key, slot_count):
             tier_config = self.config.get(tier_key, {})
             if not tier_config:
@@ -105,8 +111,6 @@ class IntentRouter:
         process_slots("tier_low", 6)
         process_slots("tier_mid", 6)
         process_slots("tier_high", 6)
-
-
 
         # Flatten descriptions
         final_cat_map = {}
@@ -146,6 +150,17 @@ class IntentRouter:
             if context_lines:
                 context_section = "\n\nRecent Conversation Context:\n" + "\n".join(context_lines)
         
+        # --- Build task snapshots section ---
+        snapshots_section = ""
+        if task_snapshots:
+            snapshot_lines = ["=== ACTIVE TASK SNAPSHOTS ==="]
+            for snap in task_snapshots:
+                snapshot_lines.append(f"[{snap['id']}] Category={snap['category']}, Score={snap['score']}, Summary=\"{snap['summary']}\"")
+            snapshot_lines.append("(Use continued_task_id to reference a task when context_relation is 'continue' or 'downgrade')")
+            snapshots_section = "\n".join(snapshot_lines)
+        else:
+            snapshots_section = "=== ACTIVE TASK SNAPSHOTS ===\n(No active tasks)"
+        
         # Check template
         template = router_config.get("router_manual_prompt", "")
         if template and "{categories}" in template:
@@ -156,35 +171,67 @@ class IntentRouter:
              system_prompt = f"""You are a Model Router. Analyze user input and output JSON.
 
 Output format:
-{{"difficulty_score": 1-9, "category": String, "reasoning": "Brief"}}
+{{"difficulty_score": 1-9, "category": String, "context_relation": "continue"|"downgrade"|"unrelated", "continued_task_id": String|null, "reasoning": "Brief"}}
 
 Categories: {valid_cats_json}
 {cat_section}
 
-=== DIFFICULTY SCALE (1-9) ===
+{{task_snapshots}}
 
-LOW TIER (1-{t_low}) - Lightweight Model:
-- 1: Fixed replies (greetings, thanks, confirmations)
-- 2: Single-step execution (weather query, translation, format conversion, single tool call)
-- 3: Standard reasoning (algorithm implementation, math proofs, code analysis, concept explanation)
+=== CONTEXT RELATION RULES ===
+1. **continue** - Direct continuation of prior task → difficulty_score MUST match that task's score
+2. **downgrade** - Related but simpler/closure → Re-evaluate difficulty
+3. **unrelated** - New topic or chit-chat → Evaluate based on current input only
 
-MID TIER ({t_low+1}-{t_mid}) - Standard Model:
-- 4: Multi-step integration (search+analyze+suggest, 3000+ word document comprehension)
-- 5: Complex generation (function refactoring, multi-file understanding, long-form writing)
-- 6: Quality planning (project design, complex itinerary planning, architecture design)
+=== MULTI-DIMENSIONAL DIFFICULTY SCALE (1-9) ===
 
-HIGH TIER ({t_mid+1}-9) - Premium Model:
-- 7: Very long context (10000+ lines code analysis, multi-document synthesis)
-- 8: Cross-domain integration (interdisciplinary system design, complex technical decisions)
-- 9: Extreme tasks (complete product architecture, frontier problem analysis, large-scale refactoring)
+[Code/Architecture - code]
+- 1-2: Syntax questions, simple scripts, single function
+- 3-4: Algorithm implementation, debugging, standard API calls
+- 5-6: Multi-file refactoring, basic architecture, standard projects
+- 7-8: Distributed systems, microservices, high-concurrency design
+- 9: Million-level concurrency, financial-grade systems, TCC/Saga transactions
+
+[Math/Reasoning - math]
+- 1-2: Arithmetic, unit conversion, simple formulas
+- 3-4: Algebra, geometry proofs, probability
+- 5-6: Calculus, linear algebra, statistical analysis
+- 7-8: Multi-variable optimization, PDEs, number theory
+- 9: Frontier math problems, complex proofs, research-level
+
+[Roleplay - roleplay]
+- 1-2: Simple greetings, fixed responses
+- 3-4: Basic dialogue, single-scene interaction
+- 5-6: Complex plots, multi-character coordination
+- 7-8: Deep characterization, emotional nuance, long-term memory
+- 9: Professional-level creation, world-building
+
+[General Chat - chat]
+- 1-2: Greetings, thanks, simple confirmations
+- 3-4: Knowledge Q&A, concept explanations
+- 5-6: Deep discussions, opinion analysis, long responses
+- 7-8: Cross-domain synthesis, professional consulting
+- 9: Complex decision support, multi-dimensional analysis
+
+[Custom Categories]
+For user-defined categories, follow general principles:
+- 1-3: Simple, single-step, standardized
+- 4-6: Medium complexity, requires synthesis
+- 7-9: High complexity, cross-domain, frontier problems
 
 === KEY RULES ===
-1. Function/tool calls do NOT automatically add difficulty - only if multi-step coordination is needed
-2. "Check weather" = 2, NOT 4-5 (simple tool call with clear parameters)
-3. Standard reasoning tasks (proofs, algorithms) = 3, NOT higher
-4. Score based on THINKING COMPLEXITY, not task type
-5. Consider conversation context - "yes" might refer to a complex prior question
+1. First determine category, then score based on that dimension's standards
+2. Keywords like "million-level", "high-concurrency", "distributed" usually mean 7-9
+3. When context_relation is "continue", difficulty_score MUST match the continued task's score
+4. Pure chit-chat, greetings, thanks should be 1-2
 """
+
+        # 替换任务快照占位符
+        if "{task_snapshots}" in system_prompt:
+            system_prompt = system_prompt.replace("{task_snapshots}", snapshots_section)
+        else:
+            # 兜底：追加快照信息
+            system_prompt += f"\n\n{snapshots_section}"
 
         prompt = f"{context_section}\n\nCurrent User Input: {user_text}\n\nOutput JSON object."
         
