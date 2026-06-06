@@ -1,31 +1,32 @@
-
-import json
 import hashlib
+import json
 import time
-from typing import Dict, Any, Optional, List
 from collections import OrderedDict
+from typing import Any
 
-from astrbot.api.star import Context
-from astrbot.core.provider import Provider
 from astrbot.api import logger  # Use AstrBot's logger from api
+from astrbot.api.star import Context
+
 
 class IntentRouter:
     # 缓存配置
     CACHE_MAX_SIZE = 100
     CACHE_TTL_SECONDS = 300  # 5分钟过期
-    
-    def __init__(self, context: Context, config: Dict[str, Any]):
+
+    def __init__(self, context: Context, config: dict[str, Any]):
         self.context = context
         self.config = config
-        self._cache: OrderedDict[str, tuple] = OrderedDict()  # key -> (result, timestamp)
+        self._cache: OrderedDict[str, tuple] = (
+            OrderedDict()
+        )  # key -> (result, timestamp)
 
-    def _get_cache_key(self, text: str, contexts: List) -> str:
+    def _get_cache_key(self, text: str, contexts: list) -> str:
         """Generate cache key from text and recent context."""
         # 只使用最近2条上下文生成key，避免上下文变化导致缓存失效
         ctx_str = str(contexts[-2:]) if contexts else ""
         return hashlib.md5(f"{text}:{ctx_str}".encode()).hexdigest()
-    
-    def _get_cached(self, key: str) -> Optional[Dict[str, Any]]:
+
+    def _get_cached(self, key: str) -> dict[str, Any] | None:
         """Get cached result if valid (not expired)."""
         if key not in self._cache:
             return None
@@ -37,8 +38,8 @@ class IntentRouter:
         # 移动到末尾 (LRU)
         self._cache.move_to_end(key)
         return result
-    
-    def _set_cached(self, key: str, result: Dict[str, Any]):
+
+    def _set_cached(self, key: str, result: dict[str, Any]):
         """Store result in cache with LRU eviction."""
         self._cache[key] = (result, time.time())
         self._cache.move_to_end(key)
@@ -46,12 +47,17 @@ class IntentRouter:
         while len(self._cache) > self.CACHE_MAX_SIZE:
             self._cache.popitem(last=False)
 
-    async def analyze_intent(self, user_text: str, contexts: List[Dict[str, str]] = None, task_snapshots: List[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    async def analyze_intent(
+        self,
+        user_text: str,
+        contexts: list[dict[str, str]] | None = None,
+        task_snapshots: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
         """
         Analyze user intent using dynamically built system prompt.
         Now includes task snapshots for multi-task context awareness.
         Includes caching for performance optimization.
-        
+
         Args:
             user_text: Current user input
             contexts: Recent conversation history
@@ -61,36 +67,36 @@ class IntentRouter:
             contexts = []
         if task_snapshots is None:
             task_snapshots = []
-        
+
         # --- 缓存检查 ---
         cache_key = self._get_cache_key(user_text, contexts)
         cached = self._get_cached(cache_key)
         if cached is not None:
             logger.debug(f"Router cache hit for: {user_text[:30]}...")
             return cached
-            
+
         router_config = self.config.get("router_config", {})
         provider_id = router_config.get("router_provider")
         router_model = router_config.get("router_model", "")
-        
+
         # How many recent messages to include for context (configurable, default 4)
         context_limit = router_config.get("context_turns", 4)
-        
+
         logger.debug(f"Router Config: Provider={provider_id}, Model={router_model}")
 
         if not provider_id:
-             logger.warning("Router provider ID is empty.")
-             return None
-        
+            logger.warning("Router provider ID is empty.")
+            return None
+
         provider = self.context.get_provider_by_id(provider_id)
         if not provider:
             logger.error(f"Router provider not found: {provider_id}")
             return None
 
         # --- Build Dynamic System Prompt from Frames (Fixed Slots) ---
-        
-        categories_map = {} # name -> list of descriptions
-        
+
+        categories_map = {}  # name -> list of descriptions
+
         # Helper to process fixed slots
         def process_slots(tier_key, slot_count):
             tier_config = self.config.get(tier_key, {})
@@ -100,7 +106,7 @@ class IntentRouter:
             for i in range(1, slot_count + 1):
                 name = tier_config.get(f"r{i}_name", "").strip()
                 desc = tier_config.get(f"r{i}_desc", "").strip()
-                
+
                 if name:
                     if name not in categories_map:
                         categories_map[name] = []
@@ -116,7 +122,7 @@ class IntentRouter:
         final_cat_map = {}
         for k, v in categories_map.items():
             final_cat_map[k] = " / ".join(v)
-            
+
         # Build prompt text
         cat_lines = []
         for name, desc in final_cat_map.items():
@@ -124,16 +130,14 @@ class IntentRouter:
         cat_section = "\n".join(cat_lines)
         valid_cats_json = str(list(final_cat_map.keys())).replace("'", '"')
 
-        # Get Thresholds
-        t_low = self.config.get("tier_low", {}).get("max_score", 3)
-        t_mid = self.config.get("tier_mid", {}).get("max_score", 7)
-        
         # --- Format conversation context ---
         context_section = ""
         if contexts and len(contexts) > 0:
             # context_turns is number of rounds (1 round = user + assistant), so multiply by 2 for messages
             message_limit = context_limit * 2
-            recent_contexts = contexts[-message_limit:] if len(contexts) > message_limit else contexts
+            recent_contexts = (
+                contexts[-message_limit:] if len(contexts) > message_limit else contexts
+            )
             context_lines = []
             for msg in recent_contexts:
                 # Handle both dict format and string format
@@ -148,27 +152,35 @@ class IntentRouter:
                 if content:
                     context_lines.append(f"[{role}]: {content}")
             if context_lines:
-                context_section = "\n\nRecent Conversation Context:\n" + "\n".join(context_lines)
-        
+                context_section = "\n\nRecent Conversation Context:\n" + "\n".join(
+                    context_lines
+                )
+
         # --- Build task snapshots section ---
         snapshots_section = ""
         if task_snapshots:
             snapshot_lines = ["=== ACTIVE TASK SNAPSHOTS ==="]
             for snap in task_snapshots:
-                snapshot_lines.append(f"[{snap['id']}] Category={snap['category']}, Score={snap['score']}, Summary=\"{snap['summary']}\"")
-            snapshot_lines.append("(Use continued_task_id to reference a task when context_relation is 'continue' or 'downgrade')")
+                snapshot_lines.append(
+                    f"[{snap['id']}] Category={snap['category']}, "
+                    f'Score={snap["score"]}, Summary="{snap["summary"]}"'
+                )
+            snapshot_lines.append(
+                "(Use continued_task_id to reference a task when context_relation "
+                "is 'continue' or 'downgrade')"
+            )
             snapshots_section = "\n".join(snapshot_lines)
         else:
             snapshots_section = "=== ACTIVE TASK SNAPSHOTS ===\n(No active tasks)"
-        
+
         # Check template
         template = router_config.get("router_manual_prompt", "")
         if template and "{categories}" in template:
-             system_prompt = template.replace("{categories}", cat_section)
+            system_prompt = template.replace("{categories}", cat_section)
         elif template:
-             system_prompt = template
+            system_prompt = template
         else:
-             system_prompt = f"""You are a Model Router. Analyze user input and output JSON.
+            system_prompt = f"""You are a Model Router. Analyze user input and output JSON.
 
 Output format:
 {{"difficulty_score": 1-9, "category": String, "context_relation": "continue"|"downgrade"|"unrelated", "continued_task_id": String|null, "reasoning": "Brief"}}
@@ -233,39 +245,44 @@ For user-defined categories, follow general principles:
             # 兜底：追加快照信息
             system_prompt += f"\n\n{snapshots_section}"
 
-        prompt = f"{context_section}\n\nCurrent User Input: {user_text}\n\nOutput JSON object."
-        
+        prompt = (
+            f"{context_section}\n\nCurrent User Input: {user_text}\n\n"
+            "Output JSON object."
+        )
+
         try:
             logger.debug("Sending request to Router Model...")
             response = await provider.text_chat(
                 prompt=f"{system_prompt}\n\n{prompt}",
                 contexts=[],
-                model=router_model if router_model else None
+                model=router_model if router_model else None,
             )
-            
+
             raw_text = response.completion_text.strip()
             logger.debug(f"Router Raw Output: {raw_text}")
-            
+
             # Basic cleanup
             if raw_text.startswith("```"):
                 lines = raw_text.splitlines()
-                if lines[0].startswith("```"): lines = lines[1:]
-                if lines[-1].startswith("```"): lines = lines[:-1]
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
                 raw_text = "\n".join(lines)
-            
+
             data = json.loads(raw_text)
-            
+
             # --- 缓存结果 ---
             self._set_cached(cache_key, data)
-            
+
             return data
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Router JSON Parse Error: {e}. Raw: {raw_text}")
             return None
         except Exception as e:
             logger.error(f"Router Unexpected Error: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
             return None
-

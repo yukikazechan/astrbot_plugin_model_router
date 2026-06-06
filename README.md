@@ -4,9 +4,19 @@
 
 `astrbot_plugin_model_router` 是一个为 AstrBot 设计的高级插件，它能够拦截用户消息，利用一个快速的 "路由模型" (Router Model) 对用户意图进行分析和打分，然后根据任务的**难度 (Difficulty)** 和 **类别 (Category)** 自动将请求分发给最合适的模型。
 
+> Fork maintained by xkeyC(Fork): https://github.com/xkeyC/astrbot_plugin_model_router
+
 实现 "简单问题用小模型（快/省），复杂问题用大模型（强/准）" 的最佳能效比。
 
 ## 📋 更新日志 (Changelog)
+
+### v0.7.0
+- ✨ **默认 Low Tier**: 插件启用后，非动态路由会话默认使用 Low Tier 的全局模型。
+- ✨ **按群开启动态路由**: 只有 `routing_control.dynamic_group_ids` 中的群号或会话 ID 会执行意图分析和动态分发。
+- ✨ **用户模型锁定**: 新增 `user_model_locks`，可将某个发送者锁定到指定 provider/model，优先级高于动态路由。
+- 🔧 **适配当前 AstrBot Fork**: 路由入口改为 `on_waiting_llm_request`，并通过事件级 provider/model override 设置模型。
+- 🔧 **修复上下文读取**: 从当前 AstrBot 的 `Conversation.history` JSON 中读取最近上下文。
+- 🔧 **兼容旧配置**: 如果已有 `session_control.blacklist/whitelist`，会保留旧的跳过/启用动态路由语义。
 
 ### v0.6.0 (2025-12-15)
 - ✨ **任务快照系统**: 支持多任务上下文追踪，AI 可在多个活跃任务间智能选择延续哪个
@@ -21,10 +31,11 @@
 *   **🧠 智能意图识别**: 自动分析用户输入是闲聊、代码、角色扮演、数学问题还是其他自定义类别。
 *   **⚖️ 难度分级路由**: 
     *   **🟢 Low Tier (1-3分)**: 简单问候、天气查询 -> 路由到轻量模型。
-    *   **🟡 Mid Tier (4-6分)**: 常规逻辑、文案生成 -> 路由到标准模型。
+    *   **🟡 Mid Tier (4-7分)**: 常规逻辑、文案生成 -> 路由到标准模型。
     *   **🔴 High Tier (7-9分)**: 复杂推理、深度编程 -> 路由到高性能模型。
 *   **📝 上下文感知**: 路由判断时会参考最近的对话历史，避免因上下文缺失导致的误判。
-*   **🛡️ 会话黑/白名单**: 支持针对特定群组或用户开启/关闭路由功能。
+*   **🛡️ 按群启用动态路由**: 默认使用 Low Tier 模型，仅对指定群或会话启用动态路由。
+*   **🔒 用户模型锁定**: 支持将某个用户固定到指定 provider/model。
 *   **⚙️ 高度可配置**: 支持自定义分类规则、难度阈值、提示词模板。
 *   **🐛 详细调试模式**: 实时查看路由器的思考过程、评分和分发结果。
 
@@ -36,7 +47,7 @@
 
 ## ⚙️ 配置说明 (Configuration)
 
-配置分为 **核心设置 (Core)**、**等级框架 (Tiers)** 和 **会话控制 (Session)** 三大部分。
+配置分为 **核心设置 (Core)**、**等级框架 (Tiers)**、**路由控制 (Routing Control)** 和 **用户锁定 (User Locks)**。
 
 ### 1. 核心设置 (Router Config)
 
@@ -56,7 +67,7 @@
 | 等级 | 适用场景 | 关键配置 |
 | :--- | :--- | :--- |
 | **🟢 Low Tier** | 闲聊、简单指令、单一工具调用 | **Max Score (默认3)**: 分数 <= 此值进入 Low Tier。<br>**Global Model**: 此等级的默认模型。<br>**Rules (r1-r6)**: 针对特定分类 (如 math, chat) 指定模型。 |
-| **🟡 Mid Tier** | 一般逻辑、多步任务、文档摘要 | **Max Score (默认6)**: 分数 <= 此值 (且 > Low) 进入 Mid Tier。<br>**Global Model**: 此等级的默认模型。 |
+| **🟡 Mid Tier** | 一般逻辑、多步任务、文档摘要 | **Max Score (默认7)**: 分数 <= 此值 (且 > Low) 进入 Mid Tier。<br>**Global Model**: 此等级的默认模型。 |
 | **🔴 High Tier** | 复杂代码、深度推理、创意写作 | **Global Model**: 此等级的默认模型 (通常配置为最强模型)。<br>**Rules (r1-r6)**: 同样可针对分类指定模型。 |
 
 **规则 (Rules) 配置说明:**
@@ -66,13 +77,31 @@
 *   `provider`: 命中该分类时使用的服务商。
 *   `model`: 命中该分类时使用的模型名。
 
-### 3. 会话控制 (Session Control)
+### 3. 路由控制 (Routing Control)
 
 | 配置项 | 说明 |
 | :--- | :--- |
-| `filter_type` | `blacklist` (黑名单模式) 或 `whitelist` (白名单模式)。 |
-| `blacklist` | 黑名单列表，其中的 Session ID 将**跳过**路由，直接使用 AstrBot 全局默认模型。 |
-| `whitelist` | 白名单列表，**只有**其中的 Session ID 会启用路由功能。 |
+| `routing_control.dynamic_group_ids` | 启用动态路由的群号或 `unified_msg_origin`。不在列表中的请求默认走 Low Tier 全局模型。 |
+
+已有旧配置 `session_control.blacklist/whitelist` 时仍会被兼容读取：blacklist 命中的会话会跳过模型路由；whitelist 命中的会话会启用动态路由，未命中的会话会跳过模型路由。
+
+### 4. 用户模型锁定 (User Locks)
+
+`user_model_locks` 用于将某个发送者锁定到指定 provider/model。锁定规则优先级最高，命中后会跳过动态路由。
+
+| 配置项 | 说明 |
+| :--- | :--- |
+| `sender_id` | 要锁定的用户 ID。 |
+| `group_id` | 可选，留空表示所有群/私聊生效；填写群号或 `unified_msg_origin` 表示只在该范围生效。 |
+| `provider_id` | 锁定使用的 provider。 |
+| `model_name` | 锁定使用的模型名，留空则使用 provider 默认模型。 |
+
+## 路由优先级
+
+1. 用户模型锁定：命中 `user_model_locks` 后直接使用锁定模型。
+2. 已存在的事件级模型选择：如果其他插件或平台已经设置 provider/model，模型路由器不覆盖。
+3. 群动态路由：当前群/会话在 `dynamic_group_ids` 中时，调用 Router Model 分析并分发到 Low/Mid/High Tier。
+4. 默认 Low Tier：其他请求直接使用 `tier_low.global_provider` / `tier_low.global_model`。
 
 ## 💻 指令 (Commands)
 
@@ -83,9 +112,12 @@
 | `/router config` | 以表格形式显示当前的路由规则配置。 | `/router config` |
 | `/router status` | 查看插件启用状态、当前路由模型等信息。 | `/router status` |
 | `/router debug [on/off]` | 开启或关闭调试模式。不带参数则切换状态。 | `/router debug on` |
-| `/router list` | 显示当前的黑/白名单列表。 | `/router list` |
-| `/router add [sid]` | 将当前会话 (或指定SID) 添加到名单中。 | `/router add` |
-| `/router remove [sid]` | 将当前会话 (或指定SID) 从名单中移除。 | `/router remove` |
+| `/router groups` | 显示已启用动态路由的群/会话。 | `/router groups` |
+| `/router group add [group_id\|sid]` | 为当前群或指定群/会话开启动态路由。 | `/router group add` |
+| `/router group remove [group_id\|sid]` | 关闭当前群或指定群/会话的动态路由。 | `/router group remove` |
+| `/router locks` | 显示用户模型锁定规则。 | `/router locks` |
+| `/router lock add <sender_id> <provider_id> [model] [group_id\|sid]` | 锁定用户模型。 | `/router lock add 123 provider_a gpt-4o-mini` |
+| `/router lock remove <sender_id> [group_id\|sid]` | 删除用户模型锁定。 | `/router lock remove 123` |
 
 ---
 
@@ -111,80 +143,26 @@ AstrBot 使用洋葱模型处理消息，按顺序执行以下 9 个 Stage：
 
 ### 本插件的工作流程
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant User as 用户
-    participant Pipeline as AstrBot Pipeline
-    participant WakingStage as WakingCheckStage
-    participant Plugin as Model Router 插件
-    participant RouterLLM as 路由模型
-    participant ProcessStage as ProcessStage
-    participant TargetLLM as 目标模型
-
-    User->>Pipeline: 发送消息
-    Pipeline->>WakingStage: Stage 1: 唤醒检查
-    
-    rect rgb(255, 248, 230)
-        Note over WakingStage: 遍历所有已注册的 Handler
-        WakingStage->>WakingStage: 检测 @filter.event_message_type
-        Note over WakingStage: 本插件 priority=9999，排序靠前
-        WakingStage->>Plugin: 激活 pre_route_message Handler
-    end
-
-    rect rgb(255, 240, 220)
-        Note over Plugin: 🔌 插件逻辑执行
-        Plugin->>Plugin: 检查会话黑/白名单
-        
-        alt 命中黑名单或未在白名单
-            Plugin-->>Pipeline: return (不干预)
-        else 通过检查
-            Plugin->>Plugin: 读取对话上下文
-            Plugin->>RouterLLM: 请求意图分析
-            RouterLLM-->>Plugin: {"category": "code", "difficulty": 8}
-            Plugin->>Plugin: 匹配 Tier 规则
-            Note over Plugin: 💉 关键：注入决策
-            Plugin->>Plugin: event.set_extra("selected_provider", ...)
-            Plugin->>Plugin: event.set_extra("selected_model", ...)
-        end
-    end
-    
-    Pipeline->>Pipeline: Stage 2-6: 其他检查...
-    Pipeline->>ProcessStage: Stage 7: ProcessStage
-
-    rect rgb(230, 245, 255)
-        Note over ProcessStage: ProcessStage -> InternalAgentSubStage
-        ProcessStage->>ProcessStage: _select_provider(event)
-        
-        alt event.get_extra("selected_provider") 存在
-            Note over ProcessStage: 🚀 使用插件指定的模型
-            ProcessStage->>TargetLLM: 调用目标模型
-        else 无标记
-            ProcessStage->>TargetLLM: 调用用户默认模型
-        end
-        
-        TargetLLM-->>ProcessStage: 返回结果
-    end
-
-    Pipeline->>Pipeline: Stage 8-9: 装饰 & 发送
-    Pipeline-->>User: 回复消息
-```
+1. AstrBot 确认消息会进入 LLM 流程后，触发 `OnWaitingLLMRequestEvent`。
+2. 插件先检查 `user_model_locks`，命中则直接写入事件级 provider/model override。
+3. 如果当前群或会话在 `routing_control.dynamic_group_ids` 中，插件调用 Router Model 做意图分析，再按 Low/Mid/High Tier 选择目标 provider/model。
+4. 如果未启用动态路由或路由分析失败，插件默认写入 Low Tier 的全局 provider/model。
+5. 后续 AstrBot 构建 LLM 请求时读取事件上的 `selected_provider` / `selected_model`，使用插件选择的模型。
 
 ### 关键代码对照表
 
 | 阶段 | 插件代码 | AstrBot 核心代码 | 说明 |
 |:---|:---|:---|:---|
-| **Handler 注册** | `@filter.event_message_type(ALL, priority=9999)` | `star_handler.py` L246-258 | 注册到 `star_handlers_registry`，按 priority 排序 |
-| **Handler 激活** | - | `waking_check/stage.py` L133-198 | `WakingCheckStage` 遍历 registry，执行 filter 匹配 |
-| **注入决策** | `event.set_extra("selected_provider", id)` | - | 将目标模型 ID 写入 Event 对象 |
-| **读取决策** | - | `internal.py` L69-79 `_select_provider()` | 优先读取 `selected_provider`，否则使用默认 |
+| **Handler 注册** | `@filter.on_waiting_llm_request(priority=-100)` | `internal.py` L215 | 在 LLM 请求构建前执行，避免普通消息被插件误唤醒 |
+| **注入决策** | `event.set_selected_provider(provider_id, model_name)` | `astr_message_event.py` | 将目标模型 ID 写入事件级 override |
+| **读取决策** | - | `astr_main_agent.py` `_select_provider()` | 优先读取 `selected_provider`，否则使用默认 |
 | **Debug 输出** | `@after_message_sent()` | `star_handler.py` L529-540 | 注册 `OnAfterMessageSentEvent` 类型的 Handler |
 
 ### 核心机制解析
 
-1.  **高优先级抢占**: `priority=9999` 确保本插件的 Handler 在 `WakingCheckStage` 遍历时排在最前面被激活。
-2.  **数据注入点**: `event.set_extra()` 是 AstrBot 插件间通信的标准方式，本插件利用这一机制向后续 Stage 传递决策。
-3.  **隐式接口**: `InternalAgentSubStage._select_provider()` 优先检查 `selected_provider` extra 数据，这是 AstrBot 预留的扩展点，本插件无需修改核心代码即可实现模型劫持。
+1.  **后置 LLM 钩子**: 插件只在 AstrBot 已决定请求 LLM 后运行，不会让普通群消息被误唤醒。
+2.  **事件级 override**: `event.set_selected_provider()` 只影响当前请求，不会修改会话配置。
+3.  **优先级清晰**: 用户锁定 > 群动态路由 > 默认 Low Tier。
 
 ---
 

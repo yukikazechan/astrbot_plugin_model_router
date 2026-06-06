@@ -509,37 +509,65 @@
             }
         }
     },
-    "session_control": {
+    "routing_control": {
         "type": "object",
-        "description": "⚙️ 会话控制 (Session Control)",
+        "description": "⚙️ 路由控制 (Routing Control)",
         "items": {
-            "filter_type": {
-                "type": "string",
-                "description": "过滤模式 (Filter Mode)",
-                "enum": [
-                    "blacklist",
-                    "whitelist"
-                ],
-                "default": "blacklist",
-                "hint": "whitelist: 仅允许白名单内的会话使用路由；blacklist: 黑名单内的会话不使用路由。"
-            },
-            "whitelist": {
+            "dynamic_group_ids": {
                 "type": "list",
-                "description": "白名单 (Whitelist)",
+                "description": "启用动态路由的群或会话 ID",
                 "items": {
                     "type": "string"
                 },
                 "default": [],
-                "hint": "白名单模式下，仅这些会话使用路由。"
-            },
-            "blacklist": {
-                "type": "list",
-                "description": "黑名单 (Blacklist)",
+                "hint": "只有列表内的群号或 unified_msg_origin 会进行 AI 动态路由分析。其他会话默认使用 Low Tier 的全局模型。"
+            }
+        }
+    },
+    "user_model_locks": {
+        "type": "template_list",
+        "description": "用户模型锁定规则",
+        "hint": "命中用户锁定后会跳过动态路由，直接使用指定模型。优先级高于默认 Low Tier 和群动态路由。",
+        "templates": {
+            "lock_rule": {
+                "name": "用户模型锁定",
+                "hint": "按发送者 ID 锁定 provider/model，可选限定某个群或会话。",
                 "items": {
-                    "type": "string"
-                },
-                "default": [],
-                "hint": "黑名单模式下，这些会话不使用路由。"
+                    "rule_enabled": {
+                        "type": "bool",
+                        "description": "是否启用该规则",
+                        "default": true
+                    },
+                    "rule_name": {
+                        "type": "string",
+                        "description": "规则名称",
+                        "default": ""
+                    },
+                    "sender_id": {
+                        "type": "string",
+                        "description": "发送者 ID",
+                        "hint": "要锁定模型的用户 ID。",
+                        "default": ""
+                    },
+                    "group_id": {
+                        "type": "string",
+                        "description": "群号或会话 ID（可选）",
+                        "hint": "留空表示该用户在所有群/私聊都锁定；填写群号或 unified_msg_origin 表示仅在该范围内生效。",
+                        "default": ""
+                    },
+                    "provider_id": {
+                        "type": "string",
+                        "description": "锁定的模型服务商",
+                        "_special": "select_provider",
+                        "default": ""
+                    },
+                    "model_name": {
+                        "type": "string",
+                        "description": "锁定的模型名称",
+                        "hint": "留空则使用该 provider 的默认模型。",
+                        "default": ""
+                    }
+                }
             }
         }
     }
