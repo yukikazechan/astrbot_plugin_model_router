@@ -8,6 +8,12 @@
 
 ## 📋 更新日志 (Changelog)
 
+### v0.6.1 (2026-07-19)
+- ✨ **UMO 黑/白名单**: 按 `event.unified_msg_origin` 精确匹配，支持 WebUI 下拉配置
+- ✨ **运行时模式切换**: 新增 `/router mode [blacklist|whitelist]`
+- 💾 **配置持久化**: `/router mode/add/remove` 修改会调用 AstrBot 配置保存接口
+- 🧪 **过滤测试**: 覆盖默认模式、精确匹配、非法模式回退和输入规范化
+
 ### v0.6.0 (2025-12-15)
 - ✨ **任务快照系统**: 支持多任务上下文追踪，AI 可在多个活跃任务间智能选择延续哪个
 - ✨ **多维度难度评分**: 针对 code/math/roleplay/chat 等不同维度提供独立的评分标准
@@ -24,7 +30,7 @@
     *   **🟡 Mid Tier (4-6分)**: 常规逻辑、文案生成 -> 路由到标准模型。
     *   **🔴 High Tier (7-9分)**: 复杂推理、深度编程 -> 路由到高性能模型。
 *   **📝 上下文感知**: 路由判断时会参考最近的对话历史，避免因上下文缺失导致的误判。
-*   **🛡️ 会话黑/白名单**: 支持针对特定群组或用户开启/关闭路由功能。
+*   **🛡️ UMO 黑/白名单**: 根据会话的 UMO 精确控制是否启用路由功能。
 *   **⚙️ 高度可配置**: 支持自定义分类规则、难度阈值、提示词模板。
 *   **🐛 详细调试模式**: 实时查看路由器的思考过程、评分和分发结果。
 
@@ -66,13 +72,17 @@
 *   `provider`: 命中该分类时使用的服务商。
 *   `model`: 命中该分类时使用的模型名。
 
-### 3. 会话控制 (Session Control)
+### 3. UMO 会话控制 (Session Control)
+
+UMO 是 `event.unified_msg_origin` 提供的会话唯一标识字符串。本插件对完整 UMO 做精确匹配，不做子串或正则匹配。
 
 | 配置项 | 说明 |
 | :--- | :--- |
 | `filter_type` | `blacklist` (黑名单模式) 或 `whitelist` (白名单模式)。 |
-| `blacklist` | 黑名单列表，其中的 Session ID 将**跳过**路由，直接使用 AstrBot 全局默认模型。 |
-| `whitelist` | 白名单列表，**只有**其中的 Session ID 会启用路由功能。 |
+| `blacklist` | UMO 黑名单；命中时**跳过**路由，直接使用 AstrBot 当前默认模型。 |
+| `whitelist` | UMO 白名单；**只有**命中的会话会启用路由功能。 |
+
+默认为空黑名单，因此升级后所有会话仍保持现有路由行为。切换到空白名单后，所有会话都会跳过路由，需先添加允许的 UMO。
 
 ## 💻 指令 (Commands)
 
@@ -83,9 +93,10 @@
 | `/router config` | 以表格形式显示当前的路由规则配置。 | `/router config` |
 | `/router status` | 查看插件启用状态、当前路由模型等信息。 | `/router status` |
 | `/router debug [on/off]` | 开启或关闭调试模式。不带参数则切换状态。 | `/router debug on` |
-| `/router list` | 显示当前的黑/白名单列表。 | `/router list` |
-| `/router add [sid]` | 将当前会话 (或指定SID) 添加到名单中。 | `/router add` |
-| `/router remove [sid]` | 将当前会话 (或指定SID) 从名单中移除。 | `/router remove` |
+| `/router mode [blacklist\|whitelist]` | 切换 UMO 过滤模式并持久化。 | `/router mode whitelist` |
+| `/router list` | 显示当前模式使用的 UMO 名单。 | `/router list` |
+| `/router add [umo]` | 将当前会话（或指定 UMO）添加到当前名单并持久化。 | `/router add` |
+| `/router remove [umo]` | 将当前会话（或指定 UMO）从当前名单移除并持久化。 | `/router remove` |
 
 ---
 

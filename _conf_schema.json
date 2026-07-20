@@ -515,31 +515,35 @@
         "items": {
             "filter_type": {
                 "type": "string",
-                "description": "过滤模式 (Filter Mode)",
-                "enum": [
+                "description": "UMO 过滤模式 (Filter Mode)",
+                "options": [
                     "blacklist",
                     "whitelist"
                 ],
+                "labels": [
+                    "黑名单",
+                    "白名单"
+                ],
                 "default": "blacklist",
-                "hint": "whitelist: 仅允许白名单内的会话使用路由；blacklist: 黑名单内的会话不使用路由。"
+                "hint": "按 event.unified_msg_origin 精确匹配。whitelist: 仅白名单 UMO 使用路由；blacklist: 黑名单 UMO 跳过路由。"
             },
             "whitelist": {
                 "type": "list",
-                "description": "白名单 (Whitelist)",
+                "description": "UMO 白名单 (Whitelist)",
                 "items": {
                     "type": "string"
                 },
                 "default": [],
-                "hint": "白名单模式下，仅这些会话使用路由。"
+                "hint": "白名单模式下，仅这些完整 UMO 使用路由。"
             },
             "blacklist": {
                 "type": "list",
-                "description": "黑名单 (Blacklist)",
+                "description": "UMO 黑名单 (Blacklist)",
                 "items": {
                     "type": "string"
                 },
                 "default": [],
-                "hint": "黑名单模式下，这些会话不使用路由。"
+                "hint": "黑名单模式下，这些完整 UMO 跳过路由。"
             }
         }
     }

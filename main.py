@@ -1,26 +1,43 @@
 
 import json
 import time
+
+from astrbot.api import AstrBotConfig
 from astrbot.api.all import *
 from astrbot.api.event import filter
 from astrbot.api.event.filter import after_message_sent
 from astrbot.core.provider.entities import ProviderRequest
 
 from .routing import IntentRouter
+from .umo_filter import get_active_umo_list, get_filter_mode, is_umo_allowed
 
 @register(
     "astrbot_plugin_model_router",
     "Antigravity",
     "基于意图识别的多模型路由插件",
-    "0.5.0",
-    "https://github.com/AstrBot-Plugins/astrbot_plugin_model_router" 
+    "0.6.1",
+    "https://github.com/yukikazechan/astrbot_plugin_model_router"
 )
 class ModelRouterPlugin(Star):
-    def __init__(self, context: Context, config: dict):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self.router = IntentRouter(context, config)
         self.task_snapshots = {}  # {session_id: {task_id: {score, category, summary, time}}}
+
+    def _save_config(self):
+        """Persist runtime configuration changes when AstrBotConfig is available."""
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+
+    def _get_session_config(self) -> dict:
+        """Return a mutable session-control configuration object."""
+        session_config = self.config.get("session_control")
+        if not isinstance(session_config, dict):
+            session_config = {}
+            self.config["session_control"] = session_config
+        return session_config
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=9999)
     async def pre_route_message(self, event: AstrMessageEvent):
@@ -44,21 +61,15 @@ class ModelRouterPlugin(Star):
             logger.debug(f"🔌 Router: Skipping - command matched: {list(handlers_parsed_params.keys())}")
             return
         
-        # 1. Session Filtering (Blacklist/Whitelist)
-        sid = event.unified_msg_origin
+        # 1. UMO Filtering (Blacklist/Whitelist)
+        umo = event.unified_msg_origin
         session_cfg = self.config.get("session_control", {})
-        filter_mode = session_cfg.get("filter_type", "blacklist")
-        whitelist = session_cfg.get("whitelist", [])
-        blacklist = session_cfg.get("blacklist", [])
-        
-        if filter_mode == "blacklist":
-            if sid in blacklist:
-                logger.debug(f"🔌 Router: Session {sid} in blacklist, skipping.")
-                return
-        else:  # whitelist
-            if sid not in whitelist:
-                logger.debug(f"🔌 Router: Session {sid} NOT in whitelist, skipping.")
-                return
+        if not is_umo_allowed(umo, session_cfg):
+            filter_mode = get_filter_mode(session_cfg)
+            logger.debug(
+                f"🔌 Router: UMO {umo} rejected by {filter_mode}, skipping."
+            )
+            return
         
         # 2. Analyze Intent (using message_str since we don't have ProviderRequest yet)
         try:
@@ -370,9 +381,10 @@ class ModelRouterPlugin(Star):
                 "/router config - 显示当前路由配置\n"
                 "/router debug - 切换调试模式\n"
                 "/router status - 查看路由器状态\n"
-                "/router list - 显示黑白名单\n"
-                "/router add [sid] - 添加会话到名单\n"
-                "/router remove [sid] - 从名单移除会话"
+                "/router mode [blacklist|whitelist] - 切换 UMO 过滤模式\n"
+                "/router list - 显示当前 UMO 名单\n"
+                "/router add [umo] - 添加 UMO 到当前名单\n"
+                "/router remove [umo] - 从当前名单移除 UMO"
             )
             result.use_t2i(False)
             return result
@@ -420,35 +432,38 @@ class ModelRouterPlugin(Star):
                 f"- Enabled: {'Yes' if enabled else 'No'}\n"
                 f"- Debug: {'On' if debug else 'Off'}\n"
                 f"- Router LLM: {router_provider}:{router_model}\n"
-                f"- Version: 0.5.1"
+                f"- Version: 0.6.1"
             )
         
+        elif sub_cmd == "mode":
+            if len(args) < 3 or args[2].lower() not in ("blacklist", "whitelist"):
+                return event.plain_result(
+                    "Usage: /router mode [blacklist|whitelist]"
+                )
+
+            filter_type = args[2].lower()
+            session_cfg = self._get_session_config()
+            session_cfg["filter_type"] = filter_type
+            self._save_config()
+            return event.plain_result(f"✅ UMO filter mode: {filter_type.upper()}")
+
         elif sub_cmd == "list":
             session_cfg = self.config.get("session_control", {})
-            filter_type = session_cfg.get("filter_type", "blacklist")
-            whitelist = session_cfg.get("whitelist", [])
-            blacklist = session_cfg.get("blacklist", [])
-            
-            lines = [f"📋 Session Filter Mode: {filter_type.upper()}"]
-            
-            if filter_type == "whitelist":
-                lines.append(f"\n✅ Whitelist ({len(whitelist)} entries):")
-                if whitelist:
-                    for sid in whitelist[:20]:  # 最多显示20个
-                        lines.append(f"  • {sid}")
-                    if len(whitelist) > 20:
-                        lines.append(f"  ... and {len(whitelist) - 20} more")
-                else:
-                    lines.append("  (empty)")
+            filter_type = get_filter_mode(session_cfg)
+            active_umos = get_active_umo_list(session_cfg)
+
+            lines = [f"📋 UMO Filter Mode: {filter_type.upper()}"]
+            icon = "✅" if filter_type == "whitelist" else "🚫"
+            lines.append(
+                f"\n{icon} {filter_type.title()} ({len(active_umos)} entries):"
+            )
+            if active_umos:
+                for umo in active_umos[:20]:  # 最多显示20个
+                    lines.append(f"  • {umo}")
+                if len(active_umos) > 20:
+                    lines.append(f"  ... and {len(active_umos) - 20} more")
             else:
-                lines.append(f"\n🚫 Blacklist ({len(blacklist)} entries):")
-                if blacklist:
-                    for sid in blacklist[:20]:
-                        lines.append(f"  • {sid}")
-                    if len(blacklist) > 20:
-                        lines.append(f"  ... and {len(blacklist) - 20} more")
-                else:
-                    lines.append("  (empty)")
+                lines.append("  (empty)")
             
             result = event.plain_result("\n".join(lines))
             result.use_t2i(False)
@@ -456,43 +471,40 @@ class ModelRouterPlugin(Star):
         
         elif sub_cmd == "add":
             if len(args) < 3:
-                # 使用当前会话的 SID
-                sid = event.unified_msg_origin
+                # 使用当前会话的 UMO
+                umo = event.unified_msg_origin
             else:
-                sid = args[2]
+                umo = args[2].strip()
             
-            if "session_control" not in self.config:
-                self.config["session_control"] = {}
-            
-            filter_type = self.config["session_control"].get("filter_type", "blacklist")
-            list_key = "whitelist" if filter_type == "whitelist" else "blacklist"
-            
-            if list_key not in self.config["session_control"]:
-                self.config["session_control"][list_key] = []
-            
-            if sid not in self.config["session_control"][list_key]:
-                self.config["session_control"][list_key].append(sid)
-                return event.plain_result(f"✅ Added to {list_key}: {sid}")
+            session_cfg = self._get_session_config()
+            list_key = get_filter_mode(session_cfg)
+            active_umos = get_active_umo_list(session_cfg)
+
+            if umo and umo not in active_umos:
+                active_umos.append(umo)
+                session_cfg[list_key] = active_umos
+                self._save_config()
+                return event.plain_result(f"✅ Added to {list_key}: {umo}")
             else:
-                return event.plain_result(f"⚠️ Already in {list_key}: {sid}")
+                return event.plain_result(f"⚠️ Already in {list_key}: {umo}")
         
         elif sub_cmd == "remove":
             if len(args) < 3:
-                sid = event.unified_msg_origin
+                umo = event.unified_msg_origin
             else:
-                sid = args[2]
+                umo = args[2].strip()
             
-            if "session_control" not in self.config:
-                return event.plain_result(f"⚠️ Not found: {sid}")
-            
-            filter_type = self.config["session_control"].get("filter_type", "blacklist")
-            list_key = "whitelist" if filter_type == "whitelist" else "blacklist"
-            
-            if list_key in self.config["session_control"] and sid in self.config["session_control"][list_key]:
-                self.config["session_control"][list_key].remove(sid)
-                return event.plain_result(f"✅ Removed from {list_key}: {sid}")
+            session_cfg = self._get_session_config()
+            list_key = get_filter_mode(session_cfg)
+            active_umos = get_active_umo_list(session_cfg)
+
+            if umo in active_umos:
+                active_umos.remove(umo)
+                session_cfg[list_key] = active_umos
+                self._save_config()
+                return event.plain_result(f"✅ Removed from {list_key}: {umo}")
             else:
-                return event.plain_result(f"⚠️ Not found in {list_key}: {sid}")
+                return event.plain_result(f"⚠️ Not found in {list_key}: {umo}")
         
         else:
             return event.plain_result(f"Unknown subcommand: {sub_cmd}\nUse /router for help.")
