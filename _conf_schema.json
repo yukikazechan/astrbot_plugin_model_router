@@ -33,6 +33,12 @@
                 "hint": "指定路由使用的具体模型名称 (如 gemini-2.5-flash-lite)。留空则使用服务商默认模型。",
                 "default": ""
             },
+            "router_timeout": {
+                "type": "float",
+                "description": "路由请求超时（秒）",
+                "hint": "超时或返回非 JSON 时自动使用 AstrBot 默认模型，不阻断消息。",
+                "default": 15.0
+            },
             "router_manual_prompt": {
                 "type": "text",
                 "description": "路由提示词模板 (Prompt Template)",
