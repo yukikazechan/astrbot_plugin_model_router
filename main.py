@@ -1,6 +1,7 @@
 
 import json
 import time
+import uuid
 from astrbot.api.all import *
 from astrbot.api.event import filter
 from astrbot.api.event.filter import after_message_sent
@@ -8,12 +9,60 @@ from astrbot.core.provider.entities import ProviderRequest
 
 from .routing import IntentRouter
 
+
+def _content_to_text(content) -> str:
+    """Convert AstrBot's JSON history content into compact router text."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content or "")
+
+    parts = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, dict):
+            text = part.get("text")
+            if text is None and part.get("type") in {"text", "plain"}:
+                text = part.get("content")
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts)
+
+
+def extract_recent_contexts(history, context_turns: int, max_chars: int) -> list[dict]:
+    """Extract recent role/text messages from Conversation.history JSON data."""
+    if not isinstance(history, list):
+        return []
+    try:
+        message_limit = max(0, int(context_turns)) * 2
+    except (TypeError, ValueError):
+        message_limit = 8
+    if message_limit == 0:
+        return []
+    try:
+        char_limit = max(0, int(max_chars))
+    except (TypeError, ValueError):
+        char_limit = 500
+
+    contexts = []
+    for msg in history[-message_limit:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "user")
+        content = _content_to_text(msg.get("content"))
+        if char_limit > 0:
+            content = content[:char_limit]
+        if content:
+            contexts.append({"role": role, "content": content})
+    return contexts
+
 @register(
     "astrbot_plugin_model_router",
     "Antigravity",
     "基于意图识别的多模型路由插件",
-    "0.5.0",
-    "https://github.com/AstrBot-Plugins/astrbot_plugin_model_router" 
+    "0.6.1",
+    "https://github.com/yukikazechan/astrbot_plugin_model_router"
 )
 class ModelRouterPlugin(Star):
     def __init__(self, context: Context, config: dict):
@@ -76,15 +125,14 @@ class ModelRouterPlugin(Star):
                 cid = await conv_mgr.get_curr_conversation_id(umo)
                 if cid:
                     conv = await conv_mgr.get_conversation(umo, cid)
-                    if conv and conv.messages:
-                        # Get max chars setting (0 = no truncation)
-                        max_chars = self.config.get("router_config", {}).get("context_max_chars", 500)
-                        # Get last few messages for context
-                        for msg in conv.messages[-6:]:
-                            content = str(msg.content)
-                            if max_chars > 0:
-                                content = content[:max_chars]
-                            contexts.append({"role": msg.role, "content": content})
+                    if conv and conv.history:
+                        router_cfg = self.config.get("router_config", {})
+                        history = json.loads(conv.history)
+                        contexts = extract_recent_contexts(
+                            history,
+                            router_cfg.get("context_turns", 4),
+                            router_cfg.get("context_max_chars", 500),
+                        )
             except Exception as e:
                 logger.debug(f"Could not get conversation context: {e}")
             
@@ -159,7 +207,7 @@ class ModelRouterPlugin(Star):
             # === 更新快照 (仅当 score >= 4 且非纯闲聊) ===
             if final_score >= 4:
                 # 生成新的 task_id
-                task_id = f"task_{int(time.time()) % 10000}"
+                task_id = f"task_{uuid.uuid4().hex[:10]}"
                 # 从用户输入生成简短摘要
                 summary = user_text[:50] + ("..." if len(user_text) > 50 else "")
                 
@@ -279,10 +327,23 @@ class ModelRouterPlugin(Star):
         
     def get_target_config(self, category: str, difficulty: int):
         """Get target provider and model based on category and difficulty."""
-        # Determine tier based on difficulty
-        if difficulty <= 3:
+        # Respect configured thresholds instead of hard-coded 3/6 boundaries.
+        try:
+            score = max(1, min(int(difficulty), 9))
+        except (TypeError, ValueError):
+            score = 1
+        try:
+            low_max = max(1, min(int(self.config.get("tier_low", {}).get("max_score", 3)), 8))
+        except (TypeError, ValueError):
+            low_max = 3
+        try:
+            mid_max = max(low_max, min(int(self.config.get("tier_mid", {}).get("max_score", 7)), 8))
+        except (TypeError, ValueError):
+            mid_max = max(low_max, 7)
+
+        if score <= low_max:
             curr_tier = "low"
-        elif difficulty <= 6:
+        elif score <= mid_max:
             curr_tier = "mid"
         else:
             curr_tier = "high"

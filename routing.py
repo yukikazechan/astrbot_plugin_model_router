@@ -1,4 +1,5 @@
 
+import asyncio
 import json
 import hashlib
 import time
@@ -19,11 +20,17 @@ class IntentRouter:
         self.config = config
         self._cache: OrderedDict[str, tuple] = OrderedDict()  # key -> (result, timestamp)
 
-    def _get_cache_key(self, text: str, contexts: List) -> str:
-        """Generate cache key from text and recent context."""
-        # 只使用最近2条上下文生成key，避免上下文变化导致缓存失效
-        ctx_str = str(contexts[-2:]) if contexts else ""
-        return hashlib.md5(f"{text}:{ctx_str}".encode()).hexdigest()
+    def _get_cache_key(self, text: str, contexts: List, task_snapshots: List) -> str:
+        """Generate a stable key including every input that affects routing."""
+        payload = {
+            "text": text,
+            "contexts": contexts[-2:] if contexts else [],
+            "task_snapshots": task_snapshots or [],
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+        return hashlib.md5(encoded).hexdigest()
     
     def _get_cached(self, key: str) -> Optional[Dict[str, Any]]:
         """Get cached result if valid (not expired)."""
@@ -63,7 +70,7 @@ class IntentRouter:
             task_snapshots = []
         
         # --- 缓存检查 ---
-        cache_key = self._get_cache_key(user_text, contexts)
+        cache_key = self._get_cache_key(user_text, contexts, task_snapshots)
         cached = self._get_cached(cache_key)
         if cached is not None:
             logger.debug(f"Router cache hit for: {user_text[:30]}...")
@@ -139,10 +146,10 @@ class IntentRouter:
                 # Handle both dict format and string format
                 if isinstance(msg, dict):
                     role = msg.get("role", "user")
-                    content = msg.get("content", "")[:200]  # Truncate long messages
+                    content = str(msg.get("content", ""))
                 elif isinstance(msg, str):
                     role = "unknown"
-                    content = msg[:200]
+                    content = msg
                 else:
                     continue  # Skip invalid format
                 if content:
@@ -226,6 +233,8 @@ For user-defined categories, follow general principles:
 4. Pure chit-chat, greetings, thanks should be 1-2
 """
 
+        system_prompt = system_prompt.replace("{valid_cats_json}", valid_cats_json)
+
         # 替换任务快照占位符
         if "{task_snapshots}" in system_prompt:
             system_prompt = system_prompt.replace("{task_snapshots}", snapshots_section)
@@ -237,13 +246,23 @@ For user-defined categories, follow general principles:
         
         try:
             logger.debug("Sending request to Router Model...")
-            response = await provider.text_chat(
-                prompt=f"{system_prompt}\n\n{prompt}",
-                contexts=[],
-                model=router_model if router_model else None
+            try:
+                router_timeout = min(
+                    60.0, max(3.0, float(router_config.get("router_timeout", 15.0)))
+                )
+            except (TypeError, ValueError):
+                router_timeout = 15.0
+            response = await asyncio.wait_for(
+                provider.text_chat(
+                    prompt=f"{system_prompt}\n\n{prompt}",
+                    contexts=[],
+                    model=router_model if router_model else None,
+                    request_max_retries=1,
+                ),
+                timeout=router_timeout,
             )
-            
-            raw_text = response.completion_text.strip()
+
+            raw_text = str(getattr(response, "completion_text", "") or "").strip()
             logger.debug(f"Router Raw Output: {raw_text}")
             
             # Basic cleanup
@@ -254,18 +273,32 @@ For user-defined categories, follow general principles:
                 raw_text = "\n".join(lines)
             
             data = json.loads(raw_text)
+            if not isinstance(data, dict):
+                raise ValueError("router response is not a JSON object")
+            score = data.get("difficulty_score")
+            category = data.get("category")
+            if not isinstance(score, (int, float)) or not isinstance(category, str):
+                raise ValueError("router response is missing difficulty_score/category")
+            data["difficulty_score"] = max(1, min(int(score), 9))
             
             # --- 缓存结果 ---
             self._set_cached(cache_key, data)
             
             return data
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Router JSON Parse Error: {e}. Raw: {raw_text}")
+        except (json.JSONDecodeError, ValueError) as e:
+            preview = raw_text[:120].replace("\n", " ") if "raw_text" in locals() else ""
+            logger.warning(
+                "Router returned an invalid decision; using AstrBot default provider: "
+                f"{type(e).__name__}: {e}; preview={preview!r}"
+            )
+            return None
+        except asyncio.TimeoutError:
+            logger.warning("Router request timed out; using AstrBot default provider.")
             return None
         except Exception as e:
-            logger.error(f"Router Unexpected Error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.warning(
+                "Router request failed; using AstrBot default provider: "
+                f"{type(e).__name__}: {e}"
+            )
             return None
-
