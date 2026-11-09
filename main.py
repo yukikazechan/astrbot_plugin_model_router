@@ -29,10 +29,30 @@ class ModelRouterPlugin(Star):
         Analyzes intent and sets selected_provider/selected_model on the event.
         This way, when InternalAgentSubStage._select_provider() runs, it will find our selection.
         """
-        # Skip if not activated (wake word/@ check)
+        # Skip if not activated (wake word/@ check). Active replies are routed in route_active_reply.
         if not event.is_at_or_wake_command:
             return
-        
+        await self._route(event)
+
+    # on_waiting_llm_request exists since AstrBot v4.11.0; older versions keep the old behaviour.
+    if hasattr(filter, "on_waiting_llm_request"):
+
+        @filter.on_waiting_llm_request()
+        async def route_active_reply(self, event: AstrMessageEvent):
+            """
+            Route LLM requests that were not triggered by a wake word or @, such as group active replies.
+            Another handler (AstrBot's active reply or a plugin) starts them after pre_route_message has
+            already skipped the message. This hook runs once the request is decided but before AstrBot
+            picks the provider, so the selection still applies.
+            """
+            if event.is_at_or_wake_command or event.get_extra("selected_provider"):
+                return
+            if not self.config.get("router_config", {}).get("route_active_replies", True):
+                return
+            await self._route(event)
+
+    async def _route(self, event: AstrMessageEvent):
+        """Analyze the message intent and pre-select the provider/model on the event."""
         # 0. Plugin Switch
         if not self.config.get("plugin_enabled", True):
             return
@@ -219,7 +239,7 @@ class ModelRouterPlugin(Star):
             # Don't stop event - let AstrBot continue with our selected provider
             
         except Exception as e:
-            logger.error(f"Router error in pre_route_message: {e}")
+            logger.error(f"Router error in _route: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
