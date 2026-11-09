@@ -48,6 +48,7 @@
 | `router_config.debug_mode` | bool | `false` | 开启后，会在控制台或指定会话显示详细的路由分析日志。 |
 | `router_config.context_turns` | int | `4` | 路由判断时参考的对话轮数 (1轮=一问一答)，同时控制任务快照的有效期。 |
 | `router_config.context_max_chars` | int | `500` | 每条上下文消息的最大字符数。设置 0 表示不截断。 |
+| `router_config.route_active_replies` | bool | `true` | 主动回复也走路由。开启后，没有 @ 或唤醒词、由群聊主动回复或其他插件发起的 LLM 请求，也按难度选模型；关闭则这类请求用 AstrBot 默认模型。需要 AstrBot v4.11.0 及以上。 |
 
 ### 2. 等级框架 (Three Tiers)
 
@@ -178,6 +179,7 @@ sequenceDiagram
 | **Handler 激活** | - | `waking_check/stage.py` L133-198 | `WakingCheckStage` 遍历 registry，执行 filter 匹配 |
 | **注入决策** | `event.set_extra("selected_provider", id)` | - | 将目标模型 ID 写入 Event 对象 |
 | **读取决策** | - | `internal.py` L69-79 `_select_provider()` | 优先读取 `selected_provider`，否则使用默认 |
+| **主动回复路由** | `@filter.on_waiting_llm_request()` | `internal.py` `OnWaitingLLMRequestEvent` | 主动回复由其他 Handler 在本插件之后发起，此钩子在选模型之前补做路由 |
 | **Debug 输出** | `@after_message_sent()` | `star_handler.py` L529-540 | 注册 `OnAfterMessageSentEvent` 类型的 Handler |
 
 ### 核心机制解析

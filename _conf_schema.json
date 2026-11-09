@@ -51,6 +51,12 @@
                 "description": "单条消息最大字符数 (Max Chars per Message)",
                 "hint": "每条上下文消息最多保留多少字符。设置较大值可以让路由器看到更完整的上下文，但会增加 Token 消耗。设置 0 表示不截断（可能导致 Token 超限）。",
                 "default": 500
+            },
+            "route_active_replies": {
+                "type": "bool",
+                "description": "主动回复也走路由 (Route Active Replies)",
+                "hint": "开启后，没有 @ 或唤醒词、由群聊主动回复或其他插件发起的 LLM 请求也会经过路由判定，和被叫到时一样按难度选模型；关闭则这类请求使用 AstrBot 的默认模型。需要 AstrBot v4.11.0 及以上。",
+                "default": true
             }
         }
     },
